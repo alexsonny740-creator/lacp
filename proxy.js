@@ -17,7 +17,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const LISTEN_PORT = process.env.PORT || process.env.SERVER_PORT || 3000;
 
 const PUBLIC_URL = (
-  process.env.PUBLIC_URL || 'https://lacp.apps.bot-hosting.cloud'
+  process.env.PUBLIC_URL || 'https://lacp-g3ro.onrender.com/auth/discord'
 ).replace(/\/+$/, '');
 
 const PUBLIC_HOST = PUBLIC_URL.replace(/^https?:\/\//, '');
