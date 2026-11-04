@@ -22,7 +22,7 @@ const PUBLIC_URL = (
 
 const PUBLIC_HOST = PUBLIC_URL.replace(/^https?:\/\//, '');
 
-const TARGET_HOST = process.env.TARGET_HOST || '195.123.189.186';
+const TARGET_HOST = process.env.TARGET_HOST || '195.123.189.234';
 const TARGET_PORT = Number(process.env.TARGET_PORT || 2675);
 const TARGET_ORIGIN = `http://${TARGET_HOST}:${TARGET_PORT}`;
 const TARGET_ORIGIN_HTTPS = `https://${TARGET_HOST}:${TARGET_PORT}`;
