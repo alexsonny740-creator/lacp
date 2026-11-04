@@ -1,0 +1,11 @@
+{
+  "name": "california-rp",
+  "version": "1.0.0",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
