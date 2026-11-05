@@ -22,10 +22,24 @@ const PUBLIC_URL = (
 
 const PUBLIC_HOST = PUBLIC_URL.replace(/^https?:\/\//, '');
 
+// ---- Target 1: main LACP server (everything by default) ----
 const TARGET_HOST = process.env.TARGET_HOST || '195.123.189.234';
 const TARGET_PORT = Number(process.env.TARGET_PORT || 2675);
-const TARGET_ORIGIN = `http://${TARGET_HOST}:${TARGET_PORT}`;
-const TARGET_ORIGIN_HTTPS = `https://${TARGET_HOST}:${TARGET_PORT}`;
+
+// ---- Target 2: ban appeals bot (Roblox OAuth callback) ----
+const APPEALS_HOST = process.env.APPEALS_HOST || '195.123.189.233';
+const APPEALS_PORT = Number(process.env.APPEALS_PORT || 25977);
+
+const MAIN_TARGET = { name: 'main', host: TARGET_HOST, port: TARGET_PORT };
+const APPEALS_TARGET = { name: 'appeals', host: APPEALS_HOST, port: APPEALS_PORT };
+
+// Paths that belong to the appeals bot. Everything else goes to the main server.
+// /auth/roblox/*  -> Roblox OAuth return
+const APPEALS_PATH = /^\/auth\/roblox(\/|\?|$)/;
+
+function pickTarget(path) {
+  return APPEALS_PATH.test(path) ? APPEALS_TARGET : MAIN_TARGET;
+}
 
 const NO_CACHE = 'no-store, no-cache, must-revalidate, proxy-revalidate';
 
@@ -146,7 +160,10 @@ app.get('/health', (req, res) => {
     status: 'online',
     service: 'Los Angeles California Roleplay Reverse Proxy',
     publicUrl: PUBLIC_URL,
-    target: `${TARGET_HOST}:${TARGET_PORT}`,
+    targets: {
+      main: `${MAIN_TARGET.host}:${MAIN_TARGET.port}`,
+      appeals: `${APPEALS_TARGET.host}:${APPEALS_TARGET.port}`
+    },
     oauth: true,
     timestamp: new Date().toISOString()
   });
@@ -170,17 +187,20 @@ function removeHopByHopHeaders(headers) {
   return headers;
 }
 
-// Rewrite backend redirects (important for Discord OAuth) so users
-// never see the backend IP:port, only the public domain.
-function rewriteLocation(location) {
+// Rewrite backend redirects so users never see a backend IP:port,
+// only the public domain. Works for whichever target answered.
+function rewriteLocation(location, target) {
   if (!location || typeof location !== 'string') return location;
 
-  if (location.startsWith(TARGET_ORIGIN)) {
-    return PUBLIC_URL + location.slice(TARGET_ORIGIN.length);
+  const origin = `http://${target.host}:${target.port}`;
+  const originHttps = `https://${target.host}:${target.port}`;
+
+  if (location.startsWith(origin)) {
+    return PUBLIC_URL + location.slice(origin.length);
   }
 
-  if (location.startsWith(TARGET_ORIGIN_HTTPS)) {
-    return PUBLIC_URL + location.slice(TARGET_ORIGIN_HTTPS.length);
+  if (location.startsWith(originHttps)) {
+    return PUBLIC_URL + location.slice(originHttps.length);
   }
 
   if (location.startsWith('/')) {
@@ -197,6 +217,7 @@ function rewriteLocation(location) {
 function proxyRequest(req, res) {
   const startTime = Date.now();
   const requestPath = req.originalUrl || req.url;
+  const target = pickTarget(requestPath);
   const remoteAddress = req.socket.remoteAddress || '';
   const existingForwardedFor = req.headers['x-forwarded-for'];
 
@@ -206,7 +227,7 @@ function proxyRequest(req, res) {
 
   const headers = {
     ...req.headers,
-    host: `${TARGET_HOST}:${TARGET_PORT}`,
+    host: `${target.host}:${target.port}`,
     'x-forwarded-for': forwardedFor,
     'x-real-ip': remoteAddress,
     'x-forwarded-host': PUBLIC_HOST,
@@ -218,7 +239,7 @@ function proxyRequest(req, res) {
     connection: 'keep-alive'
   };
 
-  // Cookie / Set-Cookie are intentionally untouched (Discord OAuth needs them).
+  // Cookie / Set-Cookie are intentionally untouched (OAuth needs them).
 
   // Never let the backend answer 304 for HTML we need to rewrite.
   delete headers['if-none-match'];
@@ -227,8 +248,8 @@ function proxyRequest(req, res) {
   removeHopByHopHeaders(headers);
 
   const options = {
-    hostname: TARGET_HOST,
-    port: TARGET_PORT,
+    hostname: target.host,
+    port: target.port,
     path: requestPath,
     method: req.method,
     headers,
@@ -238,8 +259,8 @@ function proxyRequest(req, res) {
 
   console.log(
     requestPath.startsWith('/auth/')
-      ? `[Proxy] OAuth ${req.method} ${requestPath}`
-      : `[Proxy] ${req.method} ${requestPath} -> ${TARGET_HOST}:${TARGET_PORT}`
+      ? `[Proxy:${target.name}] OAuth ${req.method} ${requestPath}`
+      : `[Proxy:${target.name}] ${req.method} ${requestPath} -> ${target.host}:${target.port}`
   );
 
   const proxy = http.request(options, targetResponse => {
@@ -249,7 +270,7 @@ function proxyRequest(req, res) {
     removeHopByHopHeaders(responseHeaders);
 
     if (responseHeaders.location) {
-      responseHeaders.location = rewriteLocation(responseHeaders.location);
+      responseHeaders.location = rewriteLocation(responseHeaders.location, target);
     }
 
     const contentType = String(
@@ -313,7 +334,7 @@ function proxyRequest(req, res) {
 
   proxy.on('timeout', () => {
     console.error(
-      `[Proxy] TARGET TIMEOUT: ${TARGET_HOST}:${TARGET_PORT} (${Date.now() - startTime}ms)`
+      `[Proxy:${target.name}] TARGET TIMEOUT: ${target.host}:${target.port} (${Date.now() - startTime}ms)`
     );
 
     proxy.destroy();
@@ -327,7 +348,7 @@ function proxyRequest(req, res) {
 
   proxy.on('error', error => {
     console.error(
-      `[Proxy] TARGET CONNECTION FAILED: ${error.code || 'UNKNOWN'} - ${error.message}`
+      `[Proxy:${target.name}] TARGET CONNECTION FAILED: ${error.code || 'UNKNOWN'} - ${error.message}`
     );
 
     if (res.headersSent) {
@@ -339,7 +360,7 @@ function proxyRequest(req, res) {
   });
 
   req.on('aborted', () => {
-    console.log(`[Proxy] Client aborted ${req.method} ${requestPath}`);
+    console.log(`[Proxy:${target.name}] Client aborted ${req.method} ${requestPath}`);
     proxy.destroy();
   });
 
@@ -349,7 +370,7 @@ function proxyRequest(req, res) {
 
   res.on('finish', () => {
     console.log(
-      `[Proxy] ${req.method} ${requestPath} -> ${res.statusCode} (${Date.now() - startTime}ms)`
+      `[Proxy:${target.name}] ${req.method} ${requestPath} -> ${res.statusCode} (${Date.now() - startTime}ms)`
     );
   });
 
@@ -379,9 +400,11 @@ const server = app.listen(LISTEN_PORT, HOST, () => {
   console.log('   LOS ANGELES CALIFORNIA ROLEPLAY PROXY');
   console.log('===========================================');
   console.log(`Public    : ${PUBLIC_URL}`);
-  console.log(`Target    : ${TARGET_ORIGIN}`);
+  console.log(`Main      : http://${MAIN_TARGET.host}:${MAIN_TARGET.port}`);
+  console.log(`Appeals   : http://${APPEALS_TARGET.host}:${APPEALS_TARGET.port}`);
   console.log(`OAuth     : ${PUBLIC_URL}/auth/discord`);
   console.log(`Callback  : ${PUBLIC_URL}/auth/discord/callback`);
+  console.log(`Roblox cb : ${PUBLIC_URL}/auth/roblox/callback`);
   console.log('Health    : /health');
   console.log('Favicon   : /favicon.webp');
   console.log('===========================================');
